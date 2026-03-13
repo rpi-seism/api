@@ -1,0 +1,16 @@
+[project]
+name = "api"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi[standard]>=0.135.1",
+    "numpy>=2.4.3",
+    "obspy>=1.4.2",
+    "pyaml>=26.2.1",
+    "setuptools==81.0.0",
+]
+
+[tool.fastapi]
+entrypoint = "app.main:app"
