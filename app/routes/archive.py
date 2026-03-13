@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import FileResponse
 
 import logging
 import re
@@ -235,3 +236,30 @@ def get_events(
 
     records.sort(key=lambda r: r["filename"])
     return records[:limit]
+
+
+@router.get("/download")
+def download_mseed(
+    channel: str = Query(..., description="Channel code, e.g. EHZ"),
+    date:    str = Query(..., description="ISO date, e.g. 2025-03-23"),
+):
+    """
+    Serve the raw MiniSEED day file for download.
+    """
+    try:
+        dt  = datetime.strptime(date, "%Y-%m-%d")
+        day = dt.timetuple().tm_yday
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid date: {date!r}") from exc
+ 
+    filename = f"{ArchiveHelper.NETWORK}.{ArchiveHelper.STATION}.{ArchiveHelper.LOCATION}.{channel}.D.{dt.year}.{day:03d}"
+    path = ArchiveHelper.SDS_ROOT / str(dt.year) / ArchiveHelper.NETWORK / ArchiveHelper.STATION / f"{channel}.D" / filename
+ 
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {filename}")
+ 
+    return FileResponse(
+        path=str(path),
+        media_type="application/octet-stream",
+        filename=filename,
+    )
