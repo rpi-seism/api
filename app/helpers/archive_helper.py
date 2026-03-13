@@ -16,7 +16,7 @@ from app.exc.archive import ArchiveNotFound, InventoryNotFound, InvalidTimeForma
 logger = logging.getLogger(__name__)
 
 
-RPI_SEISM_PATH = Path(os.getenv("RPI_SEISM_PATH", "/app"))
+RPI_SEISM_PATH = Path(os.getenv("RPI_SEISM_PATH", "/usr_data"))
 
 
 def _load_config():
