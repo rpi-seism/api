@@ -26,7 +26,7 @@ def health():
     }
 
 
-@router.get("/archive/channels", response_model=list[str])
+@router.get("/channels", response_model=list[str])
 def get_channels():
     """
     Scan the SDS tree and return all unique channel codes present
@@ -54,7 +54,7 @@ def get_channels():
     return sorted(channels)
 
 
-@router.get("/archive/days", response_model=list[str])
+@router.get("/days", response_model=list[str])
 def get_days(
     channel: str = Query(..., description="Channel code, e.g. EHZ"),
 ):
@@ -90,7 +90,7 @@ def get_days(
     return sorted(days)
 
 
-@router.get("/archive/waveform")
+@router.get("/waveform")
 def get_waveform(
     channel: str = Query(...,        description="Channel code, e.g. EHZ"),
     start:   str = Query(...,        description="ISO-8601 start time"),
@@ -191,7 +191,7 @@ def get_waveform(
     }
 
 
-@router.get("/archive/events", response_model=list[dict])
+@router.get("/events", response_model=list[dict])
 def get_events(
     channel: str = Query(...,  description="Channel code, e.g. EHZ"),
     date:    str = Query(...,  description="ISO date, e.g. 2025-03-23"),
