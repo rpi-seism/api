@@ -20,9 +20,10 @@ RPI_SEISM_PATH = Path(os.getenv("RPI_SEISM_PATH", "/usr_data"))
 
 
 def _load_config():
-    if not RPI_SEISM_PATH.exists():
+    config_path = RPI_SEISM_PATH / "config.yaml"
+    if not config_path.exists():
         return {}
-    with open(RPI_SEISM_PATH, "r", encoding="utf-8") as f:
+    with open(config_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
 _cfg = _load_config()
@@ -30,7 +31,7 @@ _cfg = _load_config()
 
 class ArchiveHelper:
     """Helper methods for the archive API routes."""
-    SDS_ROOT  = RPI_SEISM_PATH / "data" / "archive"
+    SDS_ROOT  = RPI_SEISM_PATH / "archive"
     NETWORK  = _cfg.get("station", {}).get("network",  "XX")
     STATION  = _cfg.get("station", {}).get("station",  "RPI3")
     LOCATION = _cfg.get("station", {}).get("location", "00")
