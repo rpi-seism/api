@@ -20,7 +20,7 @@ RPI_SEISM_PATH = Path(os.getenv("RPI_SEISM_PATH", "/usr_data"))
 
 
 def _load_config():
-    config_path = RPI_SEISM_PATH / "config.yaml"
+    config_path = RPI_SEISM_PATH / "config.yml"
     if not config_path.exists():
         return {}
     with open(config_path, "r", encoding="utf-8") as f:
