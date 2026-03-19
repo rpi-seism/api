@@ -42,4 +42,6 @@ EXPOSE 8000
 
 RUN chmod +x ./entrypoint.sh
 
+WORKDIR /app
+
 CMD ["./entrypoint.sh"]
