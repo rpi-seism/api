@@ -12,3 +12,4 @@ wheels/
 *.mseed
 data/
 .lgd-nfy0
+*.db

@@ -40,4 +40,8 @@ ENTRYPOINT []
 
 EXPOSE 8000
 
-CMD ["uv", "run", "fastapi", "run"]
+RUN chmod +x ./entrypoint.sh
+
+WORKDIR /app
+
+CMD ["./entrypoint.sh"]
