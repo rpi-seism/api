@@ -151,3 +151,68 @@ class ArchiveHelper:
 
         # SI → nm  (1 m = 1e9 nm)
         trace.data = trace.data * 1e9
+
+    @classmethod
+    def read_channel(
+        cls,
+        channel: str,
+        start: str,
+        end: str,
+        units: str,
+        max_pts: int,
+    ) -> dict:
+        """
+        Read and process a single channel from SDS. Creates a fresh SDS client
+        per call so this function is safe to call from multiple threads or
+        back-to-back without shared state issues.
+        """
+        t_start = ArchiveHelper.parse_time(start, "start")
+        t_end   = ArchiveHelper.parse_time(end,   "end")
+
+        # Each call gets its own client instance — no shared ObsPy state
+        client = ArchiveHelper.sds_client()
+
+        try:
+            st = client.get_waveforms(
+                ArchiveHelper.NETWORK, ArchiveHelper.STATION,
+                ArchiveHelper.LOCATION, channel,
+                t_start, t_end,
+            )
+        except Exception as exc:
+            logger.warning("SDS read failed for %s: %s", channel, exc)
+            raise Exception(f"Archive read error for {channel}: {exc}") from exc
+
+        if not st:
+            raise Exception(f"No data for {channel} between {start} and {end}")
+
+        st.merge(fill_value=0)
+        tr = st[0]
+
+        if tr.stats.npts > ArchiveHelper.MAX_SAMPLES:
+            raise Exception(
+                 f"Trace contains {tr.stats.npts:,} samples which exceeds the "
+                 f"{ArchiveHelper.MAX_SAMPLES:,} sample limit. Narrow the time window."
+            )
+
+        if units != "COUNTS":
+            try:
+                ArchiveHelper.deconvolve(tr, units)
+            except Exception as exc:
+                logger.exception("Deconvolution failed for %s", channel)
+                raise Exception(f"Deconvolution failed for {channel}: {exc}",) from exc
+
+        data, factor = ArchiveHelper.peak_decimate(tr.data, max_pts)
+        display_fs   = tr.stats.sampling_rate / factor
+
+        return {
+            "channel":      channel,
+            "network":      ArchiveHelper.NETWORK,
+            "station":      ArchiveHelper.STATION,
+            "units":        ArchiveHelper.UNIT_LABELS[units],
+            "fs":           display_fs,
+            "starttime":    tr.stats.starttime.isoformat(),
+            "endtime":      tr.stats.endtime.isoformat(),
+            "npts_raw":     tr.stats.npts,
+            "npts_display": int(len(data)),
+            "data":         data.tolist(),
+        }
