@@ -61,7 +61,7 @@ class ArchiveHelper:
         "ACC":    "nm/s²",
     }
 
-    # ── Cached inventory ──────────────────────────────────────────────────────────
+    #  Cached inventory 
     # Loaded once on first deconvolution request and kept in memory.
     # Re-read from disk if station.xml is newer than the cached version
     # (handles epoch updates without restarting the API).
