@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 from obspy import UTCDateTime, read_inventory
 from obspy.clients.filesystem.sds import Client as SDSClient
-import yaml
+from rpi_seism_common.settings import Settings
 
 from app.exc.archive import ArchiveNotFound, InventoryNotFound, InvalidTimeFormat
 
@@ -22,9 +22,10 @@ RPI_SEISM_PATH = Path(os.getenv("RPI_SEISM_PATH", "/usr_data"))
 def _load_config():
     config_path = RPI_SEISM_PATH / "config.yml"
     if not config_path.exists():
-        return {}
-    with open(config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+        logger.warning("Settings not found, using defaults")
+        return Settings.get_default_settings()
+
+    return Settings.load_settings(config_path)
 
 _cfg = _load_config()
 
@@ -32,9 +33,9 @@ _cfg = _load_config()
 class ArchiveHelper:
     """Helper methods for the archive API routes."""
     SDS_ROOT  = RPI_SEISM_PATH / "archive"
-    NETWORK  = _cfg.get("station", {}).get("network",  "XX")
-    STATION  = _cfg.get("station", {}).get("station",  "RPI3")
-    LOCATION = _cfg.get("station", {}).get("location", "00")
+    NETWORK  = _cfg.station.network
+    STATION  = _cfg.station.station
+    LOCATION = _cfg.station.location_code
 
     STATION_XML  = SDS_ROOT.parent / "station.xml"
 
