@@ -9,10 +9,13 @@ dependencies = [
     "fastapi[standard]>=0.135.1",
     "numpy>=2.4.3",
     "obspy>=1.4.2",
-    "pyaml>=26.2.1",
     "setuptools==81.0.0",
     "sqlmodel>=0.0.37",
+    "rpi-seism-common",
 ]
 
 [tool.fastapi]
 entrypoint = "app.main:app"
+
+[tool.uv.sources]
+rpi-seism-common = { git = "https://github.com/rpi-seism/rpi-seism-common.git", branch = "main" }
