@@ -2,11 +2,14 @@ import logging
 from logging import config
 from os.path import exists
 from os import mkdir
+from pathlib import Path
 
 
-def configure_logger(base_path):
-    if not exists(base_path / "logs/"):
-        mkdir(base_path / "logs/")
+def configure_logger(base_path: Path):
+    logs_path = base_path / "logs"
+
+    if not logs_path.exists():
+        logs_path.mkdir(parents=True, exist_ok=True)
 
     # Logging configuration dictionary
     logging_config = {
