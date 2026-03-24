@@ -17,7 +17,7 @@ ENV UV_NO_DEV=1
 ENV UV_TOOL_BIN_DIR=/usr/local/bin
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential git python3-dev\
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Install the project's dependencies using the lockfile and settings
