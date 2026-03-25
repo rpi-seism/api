@@ -1,10 +1,11 @@
-from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse
-
 import logging
 import re
+import asyncio
 from datetime import datetime
 from typing import Annotated
+
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import FileResponse
 
 from app.helpers.archive_helper import ArchiveHelper
 
@@ -129,7 +130,7 @@ def get_waveform(
 
 
 @router.get("/waveforms")
-def get_waveforms(
+async def get_waveforms(
     channels: Annotated[list[str], Query(description="Channel codes, repeat param: ?channels=EHZ&channels=EHN")],
     start:    str = Query(...,       description="ISO-8601 start time"),
     end:      str = Query(...,       description="ISO-8601 end time"),
@@ -137,16 +138,9 @@ def get_waveforms(
     max_pts:  int = Query(4000,      description="Max display points per channel", ge=100, le=20000),
 ):
     """
-    Multi-channel waveform fetch. Returns one result object per channel.
-    Channels that have no data for the requested window are reported in
-    the 'errors' field instead of aborting the whole request.
-
-    Response shape:
-    {
-        "results": [ { channel, network, station, units, fs, starttime,
-                       endtime, npts_raw, npts_display, data }, ... ],
-        "errors":  [ { channel, detail }, ... ]
-    }
+    Multi-channel waveform fetch. All channels are read concurrently —
+    latency is bounded by the slowest channel, not the sum of all channels.
+    Channels with no data are reported in 'errors' without aborting the request.
     """
     if not channels:
         raise HTTPException(status_code=400, detail="At least one channel is required")
@@ -170,20 +164,32 @@ def get_waveforms(
             detail=f"Window too large ({window_h:.1f} h). Maximum is {ArchiveHelper.MAX_WINDOW_H} h.",
         )
 
-    results = []
-    errors  = []
-
-    for ch in channels:
+    async def _fetch(ch: str) -> tuple[str, dict | None, str | None]:
+        """
+        Run one blocking SDS read in a thread-pool worker.
+        Returns (channel, result_or_None, error_detail_or_None).
+        Each call gets its own SDSClient instance inside read_channel,
+        so there is no shared ObsPy state between concurrent tasks.
+        """
+        logger.info("Serving %s %s [%s - %s] units=%s", ArchiveHelper.STATION, ch, start, end, units)
         try:
-            logger.info("Serving %s %s [%s - %s] units=%s", ArchiveHelper.STATION, ch, start, end, units)
-            results.append(ArchiveHelper.read_channel(ch, start, end, units, max_pts))
-        except HTTPException as exc:
-            errors.append({"channel": ch, "detail": exc.detail})
+            result = await asyncio.to_thread(
+                ArchiveHelper.read_channel, ch, start, end, units, max_pts
+            )
+            return ch, result, None
         except Exception as exc:
-            errors.append({"channel": ch, "detail": str(exc)})
+            return ch, None, str(exc)
+
+    outcomes = await asyncio.gather(*(_fetch(ch) for ch in channels))
+
+    results, errors = [], []
+    for ch, result, detail in outcomes:
+        if result is not None:
+            results.append(result)
+        else:
+            errors.append({"channel": ch, "detail": detail})
 
     return {"results": results, "errors": errors}
-
 
 @router.get("/events", response_model=list[dict])
 def get_events(
