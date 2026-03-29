@@ -1,11 +1,14 @@
 import logging
 import re
+from io import BytesIO
 import asyncio
 from datetime import datetime
 from typing import Annotated
 
+import zipfile
+
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.helpers.archive_helper import ArchiveHelper
 
@@ -13,6 +16,28 @@ from app.helpers.archive_helper import ArchiveHelper
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def generate_zip(outcomes):
+    """
+    Generate a ZIP archive incrementally.
+    Yields compressed data as each file is added.
+    """
+    # Use BytesIO as the ZIP destination
+    buffer = BytesIO()
+    
+    # Create the ZIP entirely within the buffer
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for _, result, _ in outcomes:
+            if result is not None:
+                value, _, filename = result
+                zf.writestr(filename, value)
+    
+    # Seek to start so we can read it out
+    buffer.seek(0)
+    
+    # Yield the completed buffer
+    yield buffer.getvalue()
 
 
 @router.get("/health")
@@ -190,6 +215,81 @@ async def get_waveforms(
             errors.append({"channel": ch, "detail": detail})
 
     return {"results": results, "errors": errors}
+
+@router.get("/export_waveforms")
+async def export_waveforms(
+    channels: Annotated[list[str], Query(description="Channel codes, repeat param: ?channels=EHZ&channels=EHN")],
+    start:      str = Query(...,       description="ISO-8601 start time"),
+    end:        str = Query(...,       description="ISO-8601 end time"),
+    units:      str = Query("COUNTS",  description="COUNTS | VEL | DISP | ACC"),
+    fmt:        str = Query("mseed",   description="mseed | sac | csv | json")
+):
+    """
+    Export a waveform segment in the requested file format.
+    The same instrument response deconvolution available on /waveform
+    is applied here, so you can export calibrated velocity, displacement,
+    or acceleration traces directly.
+
+    Supported formats:
+    - mseed  — MiniSEED (trimmed to the requested window, not the full day file)
+    - sac    — SAC binary (first trace only after merge)
+    - csv    — Plain CSV: time_utc, value; one row per sample, no decimation
+    - json   — Same payload shape as /waveform, with peak-preserving decimation
+    """
+    if not channels:
+        raise HTTPException(status_code=400, detail="At least one channel is required")
+
+    if units not in ArchiveHelper.UNIT_LABELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid units {units!r}. Must be one of: {list(ArchiveHelper.UNIT_LABELS)}",
+        )
+
+    t_start = ArchiveHelper.parse_time(start, "start")
+    t_end   = ArchiveHelper.parse_time(end,   "end")
+
+    if t_end <= t_start:
+        raise HTTPException(status_code=400, detail="end must be after start")
+
+    window_h = (t_end - t_start) / 3600
+    if window_h > ArchiveHelper.MAX_WINDOW_H:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Window too large ({window_h:.1f} h). Maximum is {ArchiveHelper.MAX_WINDOW_H} h.",
+        )
+    
+    fmt = fmt.lower()
+    if fmt not in ArchiveHelper.EXPORT_FORMATS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid format {fmt!r}. Must be one of: {list(ArchiveHelper.EXPORT_FORMATS)}",
+        )
+
+    async def _fetch(ch: str) -> tuple[str, dict | None, str | None]:
+        """
+        Run one blocking SDS read in a thread-pool worker.
+        Returns (channel, result_or_None, error_detail_or_None).
+        Each call gets its own SDSClient instance inside export_channel,
+        so there is no shared ObsPy state between concurrent tasks.
+        """
+        logger.info("Serving %s %s [%s - %s] units=%s", ArchiveHelper.STATION, ch, start, end, units)
+        try:
+            result = await asyncio.to_thread(
+                ArchiveHelper.export_channel, ch, start, end, units, fmt
+            )
+            return ch, result, None
+        except Exception as exc:
+            return ch, None, str(exc)
+
+    outcomes = await asyncio.gather(*(_fetch(ch) for ch in channels))
+
+    file_name = f"{start}-{end}.{"-".join(channels)}.{units}.{fmt}"
+
+    return StreamingResponse(
+        generate_zip([i for i in outcomes]),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={file_name}.zip"},
+    )
 
 @router.get("/events", response_model=list[dict])
 def get_events(
