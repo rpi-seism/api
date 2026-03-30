@@ -30,7 +30,7 @@ def generate_zip(outcomes):
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         for _, result, _ in outcomes:
             if result is not None:
-                value, _, filename = result
+                value, filename = result
                 zf.writestr(filename, value)
 
     # Seek to start so we can read it out

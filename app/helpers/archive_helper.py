@@ -227,22 +227,46 @@ class ArchiveHelper:
             "npts_display": int(len(data)),
             "data":         data.tolist(),
         }
+    
+    @classmethod
+    def _to_mseed(cls, st, **kwargs) -> bytes:
+        buf = io.BytesIO()
+        st.write(buf, format="MSEED", reclen=512)
+        return buf.getvalue()
 
     @classmethod
-    def export_channel(
-        cls,
-        channel: str,
-        start: str,
-        end: str,
-        units: str,
-        fmt: str,
-    ) -> tuple[bytes, str, str]:
-        """
-        Read and optionally deconvolve a channel, then serialise to the
-        requested format.
+    def _to_sac(cls, st, **kwargs) -> bytes:
+        # Note: SAC is single-trace. st[0] is assumed here.
+        with tempfile.NamedTemporaryFile(suffix=".sac", delete=True) as tmp:
+            st[0].write(tmp.name, format="SAC")
+            with open(tmp.name, "rb") as f:
+                return f.read()
 
-        Returns (raw_bytes, mimetype, suggested_filename).
-        """
+    @classmethod
+    def _to_csv(cls, st, channel="", unit_label="", **kwargs) -> bytes:
+        tr = st[0]
+        t0, dt = tr.stats.starttime, tr.stats.delta
+        buf = io.StringIO()
+        buf.write(f"time_utc,{channel}_{unit_label}\n")
+        # Vectorized string formatting is faster for large CSVs
+        for i, v in enumerate(tr.data):
+            buf.write(f"{(t0 + i * dt).isoformat()},{v}\n")
+        return buf.getvalue().encode()
+
+    @classmethod
+    def _to_json(cls, st, channel="", unit_label="", **kwargs) -> bytes:
+        data, factor = cls.peak_decimate(st[0].data, 4000)
+        payload = {
+            "channel": channel,
+            "units": unit_label,
+            "fs": st[0].stats.sampling_rate / factor,
+            "data": data.tolist(),
+            # ... add other metadata ...
+        }
+        return json.dumps(payload).encode()
+
+    @classmethod
+    def export_channel(cls, channel: str, start: str, end: str, units: str, fmt: str):
         t_start = cls.parse_time(start, "start")
         t_end   = cls.parse_time(end,   "end")
 
@@ -270,60 +294,129 @@ class ArchiveHelper:
                 f"{cls.MAX_SAMPLES:,} sample limit. Narrow the time window."
             )
 
+        # 1. Fetch data
+        st = client.get_waveforms(
+                cls.NETWORK, cls.STATION, cls.LOCATION, channel,
+                t_start, t_end,
+            )
+        
+        # 2. Process data
         if units != "COUNTS":
-            for tr in st:
-                cls.deconvolve(tr, units)
+            for tr in st: cls.deconvolve(tr, units)
 
+        # 3. Format mapping
+        formatters = {
+            "mseed": cls._to_mseed,
+            "sac":   cls._to_sac,
+            "csv":   cls._to_csv,
+            "json":  cls._to_json,
+        }
+        
         unit_label = cls.UNIT_LABELS[units].replace("/", "-")
-        safe_start = start.replace(":", "-").replace("T", "_")[:19]
-        base_name  = f"{cls.NETWORK}.{cls.STATION}.{channel}.{safe_start}.{unit_label}"
+        file_bytes = formatters[fmt](st, channel=channel, unit_label=unit_label)
+        
+        # Generate filename
+        safe_start = start.replace(":", "-")[:16]
+        filename = f"{cls.NETWORK}.{cls.STATION}.{channel}.{safe_start}.{fmt}"
+        
+        return file_bytes, filename
 
-        mimetype, ext = cls.EXPORT_FORMATS[fmt]
-        filename = f"{base_name}.{ext}"
+    # @classmethod
+    # def export_channel(
+    #     cls,
+    #     channel: str,
+    #     start: str,
+    #     end: str,
+    #     units: str,
+    #     fmt: str,
+    # ) -> tuple[bytes, str, str]:
+    #     """
+    #     Read and optionally deconvolve a channel, then serialise to the
+    #     requested format.
 
-        if fmt == "mseed":
-            buf = io.BytesIO()
-            st.write(buf, format="MSEED", reclen=512)
-            return buf.getvalue(), mimetype, filename
+    #     Returns (raw_bytes, mimetype, suggested_filename).
+    #     """
+    #     t_start = cls.parse_time(start, "start")
+    #     t_end   = cls.parse_time(end,   "end")
 
-        if fmt == "sac":
-            # ObsPy SAC writer requires a real filesystem path
-            with tempfile.NamedTemporaryFile(suffix=".sac", delete=False) as tmp:
-                tmp_path = tmp.name
-            try:
-                # One SAC file per trace — zip them if multi-trace after merge
-                st[0].write(tmp_path, format="SAC")
-                return Path(tmp_path).read_bytes(), mimetype, filename
-            finally:
-                Path(tmp_path).unlink(missing_ok=True)
+    #     client = cls.sds_client()
+    #     try:
+    #         st = client.get_waveforms(
+    #             cls.NETWORK, cls.STATION, cls.LOCATION, channel,
+    #             t_start, t_end,
+    #         )
+    #     except ValueError as exc:
+    #         if "mmap" in str(exc).lower():
+    #             raise Exception(f"No data for {channel} between {start} and {end} (empty archive file)") from exc
+    #         raise Exception(f"Archive read error for {channel}: {exc}") from exc
+    #     except Exception as exc:
+    #         raise Exception(f"Archive read error for {channel}: {exc}") from exc
 
-        if fmt == "csv":
-            tr = st[0]
-            t0 = tr.stats.starttime
-            dt = tr.stats.delta   # seconds between samples
+    #     if not st:
+    #         raise Exception(f"No data for {channel} between {start} and {end}")
 
-            buf = io.StringIO()
-            buf.write(f"time_utc,{channel}_{unit_label}\n")
-            for i, v in enumerate(tr.data):
-                ts = (t0 + i * dt).isoformat()
-                buf.write(f"{ts},{v}\n")
-            return buf.getvalue().encode(), mimetype, filename
+    #     st.merge(fill_value=0)
 
-        if fmt == "json":
-            data, factor = cls.peak_decimate(st[0].data, 4000)
-            display_fs   = st[0].stats.sampling_rate / factor
-            payload = {
-                "channel":      channel,
-                "network":      cls.NETWORK,
-                "station":      cls.STATION,
-                "units":        unit_label,
-                "fs":           display_fs,
-                "starttime":    st[0].stats.starttime.isoformat(),
-                "endtime":      st[0].stats.endtime.isoformat(),
-                "npts_raw":     st[0].stats.npts,
-                "npts_display": int(len(data)),
-                "data":         data.tolist(),
-            }
-            return json.dumps(payload).encode(), mimetype, filename
+    #     if st[0].stats.npts > cls.MAX_SAMPLES:
+    #         raise Exception(
+    #             f"Trace contains {st[0].stats.npts:,} samples which exceeds the "
+    #             f"{cls.MAX_SAMPLES:,} sample limit. Narrow the time window."
+    #         )
 
-        raise ValueError(f"Unsupported format: {fmt!r}")
+    #     if units != "COUNTS":
+    #         for tr in st:
+    #             cls.deconvolve(tr, units)
+
+    #     unit_label = cls.UNIT_LABELS[units].replace("/", "-")
+    #     safe_start = start.replace(":", "-").replace("T", "_")[:19]
+    #     base_name  = f"{cls.NETWORK}.{cls.STATION}.{channel}.{safe_start}.{unit_label}"
+
+    #     mimetype, ext = cls.EXPORT_FORMATS[fmt]
+    #     filename = f"{base_name}.{ext}"
+
+    #     if fmt == "mseed":
+    #         buf = io.BytesIO()
+    #         st.write(buf, format="MSEED", reclen=512)
+    #         return buf.getvalue(), mimetype, filename
+
+    #     if fmt == "sac":
+    #         # ObsPy SAC writer requires a real filesystem path
+    #         with tempfile.NamedTemporaryFile(suffix=".sac", delete=False) as tmp:
+    #             tmp_path = tmp.name
+    #         try:
+    #             # One SAC file per trace — zip them if multi-trace after merge
+    #             st[0].write(tmp_path, format="SAC")
+    #             return Path(tmp_path).read_bytes(), mimetype, filename
+    #         finally:
+    #             Path(tmp_path).unlink(missing_ok=True)
+
+    #     if fmt == "csv":
+    #         tr = st[0]
+    #         t0 = tr.stats.starttime
+    #         dt = tr.stats.delta   # seconds between samples
+
+    #         buf = io.StringIO()
+    #         buf.write(f"time_utc,{channel}_{unit_label}\n")
+    #         for i, v in enumerate(tr.data):
+    #             ts = (t0 + i * dt).isoformat()
+    #             buf.write(f"{ts},{v}\n")
+    #         return buf.getvalue().encode(), mimetype, filename
+
+    #     if fmt == "json":
+    #         data, factor = cls.peak_decimate(st[0].data, 4000)
+    #         display_fs   = st[0].stats.sampling_rate / factor
+    #         payload = {
+    #             "channel":      channel,
+    #             "network":      cls.NETWORK,
+    #             "station":      cls.STATION,
+    #             "units":        unit_label,
+    #             "fs":           display_fs,
+    #             "starttime":    st[0].stats.starttime.isoformat(),
+    #             "endtime":      st[0].stats.endtime.isoformat(),
+    #             "npts_raw":     st[0].stats.npts,
+    #             "npts_display": int(len(data)),
+    #             "data":         data.tolist(),
+    #         }
+    #         return json.dumps(payload).encode(), mimetype, filename
+
+    #     raise ValueError(f"Unsupported format: {fmt!r}")
