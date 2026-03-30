@@ -25,17 +25,17 @@ def generate_zip(outcomes):
     """
     # Use BytesIO as the ZIP destination
     buffer = BytesIO()
-    
+
     # Create the ZIP entirely within the buffer
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         for _, result, _ in outcomes:
             if result is not None:
                 value, _, filename = result
                 zf.writestr(filename, value)
-    
+
     # Seek to start so we can read it out
     buffer.seek(0)
-    
+
     # Yield the completed buffer
     yield buffer.getvalue()
 
@@ -257,7 +257,7 @@ async def export_waveforms(
             status_code=400,
             detail=f"Window too large ({window_h:.1f} h). Maximum is {ArchiveHelper.MAX_WINDOW_H} h.",
         )
-    
+
     fmt = fmt.lower()
     if fmt not in ArchiveHelper.EXPORT_FORMATS:
         raise HTTPException(
