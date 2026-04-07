@@ -5,8 +5,7 @@ Helper methods for the archive API routes.
 import logging
 import os
 from pathlib import Path
-import tempfile
-import io
+from io import BytesIO, StringIO
 import json
 
 import numpy as np
@@ -230,7 +229,7 @@ class ArchiveHelper:
     
     @classmethod
     def _to_mseed(cls, st, **kwargs) -> bytes:
-        buf = io.BytesIO()
+        buf = BytesIO()
         st.write(buf, format="MSEED", reclen=512)
         return buf.getvalue()
 
@@ -248,16 +247,16 @@ class ArchiveHelper:
         tr.stats.sac['stlo'] = _cfg.station.longitude   # Station Longitude
         tr.stats.sac['stel'] = _cfg.station.elevation  # Station Elevation (m)
         
-        with tempfile.NamedTemporaryFile(suffix=".sac", delete=True) as tmp:
-            tr.write(tmp.name, format="SAC")
-            with open(tmp.name, "rb") as f:
-                return f.read()
+        buf = BytesIO()
+        tr.write(buf, format="SAC")
+
+        return buf.getvalue()
 
     @classmethod
     def _to_csv(cls, st, channel="", unit_label="", **kwargs) -> bytes:
         tr = st[0]
         t0, dt = tr.stats.starttime, tr.stats.delta
-        buf = io.StringIO()
+        buf = StringIO()
         buf.write(f"time_utc,{channel}_{unit_label}\n")
         # Vectorized string formatting is faster for large CSVs
         for i, v in enumerate(tr.data):
