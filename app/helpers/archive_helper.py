@@ -237,8 +237,19 @@ class ArchiveHelper:
     @classmethod
     def _to_sac(cls, st, **kwargs) -> bytes:
         # Note: SAC is single-trace. st[0] is assumed here.
+        tr = st[0]
+        
+        # Initialize the SAC header dictionary if it doesn't exist
+        if not hasattr(tr.stats, 'sac'):
+            tr.stats.sac = {}
+
+        # Add Station Metadata
+        tr.stats.sac['stla'] = _cfg.station.latitude   # Station Latitude
+        tr.stats.sac['stlo'] = _cfg.station.longitude   # Station Longitude
+        tr.stats.sac['stel'] = _cfg.station.elevation  # Station Elevation (m)
+        
         with tempfile.NamedTemporaryFile(suffix=".sac", delete=True) as tmp:
-            st[0].write(tmp.name, format="SAC")
+            tr.write(tmp.name, format="SAC")
             with open(tmp.name, "rb") as f:
                 return f.read()
 
@@ -293,18 +304,12 @@ class ArchiveHelper:
                 f"Trace contains {st[0].stats.npts:,} samples which exceeds the "
                 f"{cls.MAX_SAMPLES:,} sample limit. Narrow the time window."
             )
-
-        # 1. Fetch data
-        st = client.get_waveforms(
-                cls.NETWORK, cls.STATION, cls.LOCATION, channel,
-                t_start, t_end,
-            )
         
-        # 2. Process data
+        # Process data
         if units != "COUNTS":
             for tr in st: cls.deconvolve(tr, units)
 
-        # 3. Format mapping
+        # Format mapping
         formatters = {
             "mseed": cls._to_mseed,
             "sac":   cls._to_sac,
