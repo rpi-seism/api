@@ -11,6 +11,7 @@ import json
 import numpy as np
 from obspy import UTCDateTime, read_inventory
 from obspy.clients.filesystem.sds import Client as SDSClient
+from obspy.io.sac.sactrace import SACTrace
 from rpi_seism_common.settings import Settings
 
 from app.exc.archive import ArchiveNotFound, InventoryNotFound, InvalidTimeFormat
@@ -69,6 +70,16 @@ class ArchiveHelper:
         "sac":   ("application/octet-stream", "sac"),
         "csv":   ("text/csv",                 "csv"),
         "json":  ("application/json",         "json"),
+    }
+
+    COMPONENT_GEOMETRY: dict[str, tuple[float, float]] = {
+        #  channel  : (cmpaz, cmpinc)
+        #  cmpaz  — azimuth clockwise from North (deg)
+        #  cmpinc — incidence from vertical (deg): 0 = up, 90 = horizontal
+        "EHZ": (  0.0,   0.0),   # vertical
+        "EHN": (  0.0,  90.0),   # horizontal, North
+        "EHE": ( 90.0,  90.0),   # horizontal, East
+        # aggiungi altri canali se necessario (HHZ, HHN, HHE, ...)
     }
 
     #  Cached inventory 
@@ -235,21 +246,48 @@ class ArchiveHelper:
 
     @classmethod
     def _to_sac(cls, st, **kwargs) -> bytes:
-        # Note: SAC is single-trace. st[0] is assumed here.
-        tr = st[0]
-        
-        # Initialize the SAC header dictionary if it doesn't exist
-        if not hasattr(tr.stats, 'sac'):
-            tr.stats.sac = {}
+        """
+        Export a single-trace Stream to SAC binary format.
+        SAC is inherently single-trace; only st[0] is processed.
+        """
+        tr = st[0].copy()
 
-        # Add Station Metadata
-        tr.stats.sac['stla'] = _cfg.station.latitude   # Station Latitude
-        tr.stats.sac['stlo'] = _cfg.station.longitude   # Station Longitude
-        tr.stats.sac['stel'] = _cfg.station.elevation  # Station Elevation (m)
-        
+        sac = SACTrace.from_obspy_trace(tr)
+
+        # Station metadata
+        sac.stla   = _cfg.station.latitude
+        sac.stlo   = _cfg.station.longitude
+        sac.stel   = _cfg.station.elevation
+        sac.stdp   = 0.0
+        sac.kstnm  = cls.STATION[:8]
+        sac.knetwk = cls.NETWORK[:8]
+        sac.khole  = cls.LOCATION         # ← location code (era -12345)
+        sac.kcmpnm = tr.stats.channel[:8] # ← channel name  (esplicito)
+        sac.kevnm  = f"{cls.NETWORK}.{cls.STATION}"[:16]  # ← "Name" nel viewer
+
+        # Component geometry
+        az, inc = cls.COMPONENT_GEOMETRY.get(tr.stats.channel, (None, None))
+        if az is not None:
+            sac.cmpaz  = az
+            sac.cmpinc = inc
+        else:
+            logger.warning(
+                "No component geometry defined for channel %s — "
+                "cmpaz/cmpinc will be -12345 in the SAC header.",
+                tr.stats.channel,
+            )
+
+        # Event metadata (optional, passed via kwargs)
+        if "origin" in kwargs:
+            o = kwargs["origin"]
+            sac.evla = o.latitude
+            sac.evlo = o.longitude
+            sac.evdp = o.depth / 1000.0          # SAC expects km
+            sac.o    = o.time - tr.stats.starttime  # offset from trace start (s)
+            sac.ko   = "OT"
+
         buf = BytesIO()
-        tr.write(buf, format="SAC")
-
+        sac.write(buf)
         return buf.getvalue()
 
     @classmethod
