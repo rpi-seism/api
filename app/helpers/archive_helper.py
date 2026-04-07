@@ -5,8 +5,7 @@ Helper methods for the archive API routes.
 import logging
 import os
 from pathlib import Path
-import tempfile
-import io
+from io import BytesIO, StringIO
 import json
 
 import numpy as np
@@ -230,23 +229,34 @@ class ArchiveHelper:
     
     @classmethod
     def _to_mseed(cls, st, **kwargs) -> bytes:
-        buf = io.BytesIO()
+        buf = BytesIO()
         st.write(buf, format="MSEED", reclen=512)
         return buf.getvalue()
 
     @classmethod
     def _to_sac(cls, st, **kwargs) -> bytes:
         # Note: SAC is single-trace. st[0] is assumed here.
-        with tempfile.NamedTemporaryFile(suffix=".sac", delete=True) as tmp:
-            st[0].write(tmp.name, format="SAC")
-            with open(tmp.name, "rb") as f:
-                return f.read()
+        tr = st[0]
+        
+        # Initialize the SAC header dictionary if it doesn't exist
+        if not hasattr(tr.stats, 'sac'):
+            tr.stats.sac = {}
+
+        # Add Station Metadata
+        tr.stats.sac['stla'] = _cfg.station.latitude   # Station Latitude
+        tr.stats.sac['stlo'] = _cfg.station.longitude   # Station Longitude
+        tr.stats.sac['stel'] = _cfg.station.elevation  # Station Elevation (m)
+        
+        buf = BytesIO()
+        tr.write(buf, format="SAC")
+
+        return buf.getvalue()
 
     @classmethod
     def _to_csv(cls, st, channel="", unit_label="", **kwargs) -> bytes:
         tr = st[0]
         t0, dt = tr.stats.starttime, tr.stats.delta
-        buf = io.StringIO()
+        buf = StringIO()
         buf.write(f"time_utc,{channel}_{unit_label}\n")
         # Vectorized string formatting is faster for large CSVs
         for i, v in enumerate(tr.data):
@@ -293,18 +303,12 @@ class ArchiveHelper:
                 f"Trace contains {st[0].stats.npts:,} samples which exceeds the "
                 f"{cls.MAX_SAMPLES:,} sample limit. Narrow the time window."
             )
-
-        # 1. Fetch data
-        st = client.get_waveforms(
-                cls.NETWORK, cls.STATION, cls.LOCATION, channel,
-                t_start, t_end,
-            )
         
-        # 2. Process data
+        # Process data
         if units != "COUNTS":
             for tr in st: cls.deconvolve(tr, units)
 
-        # 3. Format mapping
+        # Format mapping
         formatters = {
             "mseed": cls._to_mseed,
             "sac":   cls._to_sac,
