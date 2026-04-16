@@ -364,3 +364,127 @@ def download_mseed(
         media_type="application/octet-stream",
         filename=filename,
     )
+
+@router.get("/pick")
+async def pick_p_onset(
+    start:   str = Query(...,   description="ISO-8601 start time of search window"),
+    end:     str = Query(...,   description="ISO-8601 end time of search window"),
+    f1:      float = Query(1.0,   description="Bandpass lower frequency (Hz)", ge=0.1, le=50.0),
+    f2:      float = Query(20.0,  description="Bandpass upper frequency (Hz)", ge=0.1, le=50.0),
+    lta_p:   float = Query(1.0,   description="P-wave long-term average window (s)", ge=0.1, le=10.0),
+    sta_p:   float = Query(0.1,   description="P-wave short-term average window (s)", ge=0.01, le=5.0),
+    lta_s:   float = Query(4.0,   description="S-wave long-term average window (s)", ge=0.1, le=10.0),
+    sta_s:   float = Query(1.0,   description="S-wave short-term average window (s)", ge=0.01, le=5.0),
+):
+    """
+    Run AR-AIC picker to detect P-wave and S-wave onset times.
+    
+    The picker uses an autoregressive (AR) model combined with the Akaike
+    Information Criterion (AIC) to identify phase arrivals in seismic data.
+    
+    Typical usage:
+    - Set a search window around the expected arrival time
+    - Use EHZ channel for P-wave detection
+    - Adjust frequency band to match expected signal content
+    - Tune STA/LTA windows based on expected onset sharpness
+    
+    Returns:
+    - p_pick: ISO timestamp of P-wave onset (None if not detected)
+    - s_pick: ISO timestamp of S-wave onset (None if not detected)
+    - snr: Signal-to-noise ratio
+    - picker_params: Parameters used for picking
+    """
+    if f2 <= f1:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Upper frequency f2 ({f2}) must be greater than lower frequency f1 ({f1})"
+        )
+    
+    t_start = ArchiveHelper.parse_time(start, "start")
+    t_end   = ArchiveHelper.parse_time(end, "end")
+    
+    if t_end <= t_start:
+        raise HTTPException(status_code=400, detail="end must be after start")
+    
+    window_h = (t_end - t_start) / 3600
+    if window_h > ArchiveHelper.MAX_WINDOW_H:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Window too large ({window_h:.1f} h). Maximum is {ArchiveHelper.MAX_WINDOW_H} h.",
+        )
+    
+    logger.info(
+        "Running picker on %s [%s - %s] f1=%.1f f2=%.1f",
+        ArchiveHelper.STATION, start, end, f1, f2
+    )
+    
+    try:
+        result = await asyncio.to_thread(
+            ArchiveHelper.pick_p_onset,
+            start, end, f1, f2, lta_p, sta_p, lta_s, sta_s
+        )
+        return result
+    except Exception as exc:
+        logger.exception("Picker failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+# Optional: Simpler AIC-only endpoint (no AR model)
+@router.get("/pick_simple")
+async def pick_simple_aic(
+    channel: str = Query("EHZ", description="Channel code for picking"),
+    start:   str = Query(...,   description="ISO-8601 start time"),
+    end:     str = Query(...,   description="ISO-8601 end time"),
+):
+    """
+    Simple AIC picker (alternative to AR-AIC).
+    
+    Uses only the Akaike Information Criterion on the raw waveform
+    without AR modeling. Faster but potentially less accurate than AR-AIC.
+    """
+    from obspy.signal.trigger import aic_simple
+    import numpy as np
+    
+    t_start = ArchiveHelper.parse_time(start, "start")
+    t_end   = ArchiveHelper.parse_time(end, "end")
+    
+    if t_end <= t_start:
+        raise HTTPException(status_code=400, detail="end must be after start")
+    
+    # Read and preprocess data
+    client = ArchiveHelper.sds_client()
+    st = client.get_waveforms(
+        ArchiveHelper.NETWORK, ArchiveHelper.STATION,
+        ArchiveHelper.LOCATION, channel,
+        t_start, t_end,
+    )
+    
+    if not st:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No data for {channel} between {start} and {end}"
+        )
+    
+    st.merge(fill_value=0)
+    tr = st[0]
+    
+    # Preprocess
+    tr.detrend("demean")
+    tr.taper(max_percentage=0.05)
+    tr.filter("bandpass", freqmin=1.0, freqmax=20.0, corners=2, zerophase=True)
+    
+    # Run simple AIC
+    aic = aic_simple(tr.data)
+    pick_sample = np.argmin(aic)
+    pick_time = (tr.stats.starttime + pick_sample / tr.stats.sampling_rate).isoformat() + "Z"
+    
+    return {
+        "channel": channel,
+        "network": ArchiveHelper.NETWORK,
+        "station": ArchiveHelper.STATION,
+        "p_pick": pick_time,
+        "search_window": {
+            "start": start,
+            "end": end,
+        },
+        "method": "aic_simple"
+    }
