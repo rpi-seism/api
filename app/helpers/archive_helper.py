@@ -35,7 +35,7 @@ _cfg = _load_config()
 
 class ArchiveHelper:
     """Helper methods for the archive API routes."""
-    SDS_ROOT  = RPI_SEISM_PATH / "archive"
+    SDS_ROOT  = RPI_SEISM_PATH / "archive" / "sds"
     NETWORK  = _cfg.station.network
     STATION  = _cfg.station.station
     LOCATION = _cfg.station.location_code
