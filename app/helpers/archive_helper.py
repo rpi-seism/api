@@ -40,7 +40,7 @@ class ArchiveHelper:
     STATION  = _cfg.station.station
     LOCATION = _cfg.station.location_code
 
-    STATION_XML  = SDS_ROOT.parent / "station.xml"
+    STATION_XML  = SDS_ROOT.parent.parent / "station.xml"
 
     # Hard cap — prevents OOM on absurdly large requests
     MAX_SAMPLES  = 200_000
