@@ -405,8 +405,8 @@ class ArchiveHelper:
             Pick results containing:
             - p_pick: ISO-8601 timestamp of P-wave onset (or None)
             - s_pick: ISO-8601 timestamp of S-wave onset (or None)
-            - snr: Signal-to-noise ratio
             - channel: Channel codes
+            - distance_estimation: Estimated distance in kilometers
             - search_window: Dictionary with start/end times
         """
         channel = "EH?"
@@ -432,8 +432,8 @@ class ArchiveHelper:
         
         # Preprocess: demean, taper, bandpass filter
         st.detrend("demean")
-        st.taper(max_percentage=0.05, type="cosine")
-        st.filter("bandpass", freqmin=f1, freqmax=f2, corners=2, zerophase=True)
+        st.taper(max_percentage=0.05)
+        st.filter("bandpass", freqmin=f1, freqmax=f2)
     
         # Extract components
         try:
@@ -472,15 +472,24 @@ class ArchiveHelper:
             logger.exception("AR-AIC picker failed for %s", channel)
             raise Exception(f"Picker failed for {channel}: {exc}") from exc
         
-        # Convert sample indices to absolute times
+        # Convert relative seconds to absolute times
         p_time = None
         s_time = None
+        dist_km = None
         
-        if p_pick is not None and p_pick >= 0:
-            p_time = (tr_z.stats.starttime + p_pick / samp_rate).isoformat() + "Z"
+        # ar_pick returns seconds from tr.stats.starttime
+        if p_pick > 0:
+            p_dt = tr_z.stats.starttime + p_pick
+            p_time = p_dt.isoformat() + "Z"
         
-        if s_pick is not None and s_pick >= 0:
-            s_time = (tr_z.stats.starttime + s_pick / samp_rate).isoformat() + "Z"
+        if s_pick > 0:
+            s_dt = tr_z.stats.starttime + s_pick
+            s_time = s_dt.isoformat() + "Z"
+            
+        # Calculate distance only if both picks exist
+        if p_time and s_time:
+            s_p_diff = s_dt - p_dt  # ObsPy UTCDateTime subtraction returns seconds
+            dist_km = s_p_diff * 8.0
         
         return {
             "network": cls.NETWORK,
@@ -488,5 +497,6 @@ class ArchiveHelper:
             "channels_used": [tr.stats.channel for tr in st],
             "p_pick": p_time,
             "s_pick": s_time,
+            "distance_estimation": dist_km,
             "search_window": {"start": start, "end": end}
         }
