@@ -1230,7 +1230,7 @@ wheels = [
 [[package]]
 name = "rpi-seism-common"
 version = "1.5.2"
-source = { git = "https://github.com/rpi-seism/rpi-seism-common.git?branch=main#ca82edf8cc538981dbab204112a56dc75c38545e" }
+source = { git = "https://github.com/rpi-seism/rpi-seism-common.git?branch=main#97d4c7742f5243d408ab7ee4bd352ecca8034b6e" }
 dependencies = [
     { name = "pyaml" },
     { name = "pydantic" },
